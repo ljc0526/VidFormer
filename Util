@@ -1,0 +1,60 @@
+class Conv_atten(nn.Module):
+    def __init__(self, heads, kernel_size, in_channels):
+        super().__init__()
+        self.spa_atten=spa_atten(heads,in_channels,kernel_size)
+        self.time_atten=time_atten(heads,in_channels,kernel_size)
+        self.pool=nn.AdaptiveAvgPool2d(output_size=1)
+
+
+    def forward(self, x):
+        x_t=self.pool(x)
+        x_s=F.adaptive_avg_pool3d(x,(1,x.shape[3],x.shape[4]))
+        x_t=self.time_atten(x_t)
+        x_s=self.spa_atten(x_s.squeeze())#(x_s.squeeze().unsqueeze(0))
+        x=x*F.sigmoid(x_t.unsqueeze(3).unsqueeze(4)+x_s.unsqueeze(2))#x*F.sigmoid(x_t.unsqueeze(3).unsqueeze(4)*x_s.unsqueeze(2))
+        return x
+
+class spa_atten(nn.Module):
+    def __init__(self,heads,in_channels,kernel_size):
+        super().__init__()
+        self.heads=heads
+        self.conv_kv=nn.Conv2d(in_channels,in_channels*2,kernel_size=kernel_size,padding=kernel_size//2)
+        self.conv_q=nn.Conv2d(in_channels,in_channels,kernel_size=1)
+        self.soft=nn.Softmax()
+
+    def forward(self,x):
+        _,c,h,w=x.shape
+        kv=self.conv_kv(x).chunk(2,dim=1)
+        k, v = map(lambda t: einops.rearrange(t, 'b (c head) h w->b c head (h w)', head=self.heads), kv)
+        q=self.conv_q(x)
+        q=einops.rearrange(q,'b (c head) h w -> b c head (h w)',head=self.heads)
+        scale=c**-0.5
+        x = torch.einsum('b h i c, b h j c -> b h i j', q.permute(0, 2, 3, 1), k.permute(0, 2, 3, 1))
+        x=F.softmax(x*scale)
+        x=torch.einsum('b h i c, b h j c -> b h i j',v,x)
+        x=einops.rearrange(x,'b head c (h w) -> b (head c) h w', h=h,w=w)
+        return x
+
+class time_atten(nn.Module):
+    def __init__(self,heads,in_channels,kernel_size):
+        super().__init__()
+        self.heads=heads
+        self.conv_kv=nn.Conv1d(in_channels,in_channels*2,kernel_size=kernel_size,padding=kernel_size//2)
+        self.conv_q=nn.Conv1d(in_channels,in_channels,kernel_size=1)
+        self.soft=nn.Softmax()
+
+    def forward(self,x):
+        #x=x.squeeze().unsqueeze(0)
+        x=x.squeeze()
+        _,c,l=x.shape
+        kv=self.conv_kv(x).chunk(2,dim=1)
+        k,v=map(lambda t:einops.rearrange(t,'b (c h) l -> b c h l',h=self.heads),kv)
+        q = self.conv_q(x)
+        q = einops.rearrange(q, 'b (c h) l -> b c h l', h=self.heads)
+        scale = c ** -0.5
+        x = torch.einsum('b h i c, b h j c -> b h i j', q.permute(0, 2, 3, 1), k.permute(0, 2, 3, 1))
+        x = F.softmax(x*scale)
+        x = torch.einsum('b h i c, b h j c -> b h i j', v, x)
+
+        x = einops.rearrange(x, 'b h c l-> b (h c) l', l=l)
+        return x
