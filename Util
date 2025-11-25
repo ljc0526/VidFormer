@@ -25,13 +25,13 @@ class spa_atten(nn.Module):
     def forward(self,x):
         _,c,h,w=x.shape
         kv=self.conv_kv(x).chunk(2,dim=1)
-        k, v = map(lambda t: einops.rearrange(t, 'b (c head) h w->b c head (h w)', head=self.heads), kv)
+        k, v = map(lambda t: einops.rearrange(t, 'b (c head) h w->b head c  (h w)', head=self.heads), kv)
         q=self.conv_q(x)
-        q=einops.rearrange(q,'b (c head) h w -> b c head (h w)',head=self.heads)
+        q=einops.rearrange(q,'b (c head) h w -> b head c (h w)',head=self.heads)
         scale=c**-0.5
-        x = torch.einsum('b h i c, b h j c -> b h i j', q.permute(0, 2, 3, 1), k.permute(0, 2, 3, 1))
+        x = torch.einsum('b h i c, b h j c -> b h i j', q, k)
         x=F.softmax(x*scale)
-        x=torch.einsum('b h i c, b h j c -> b h i j',v,x)
+        x=torch.einsum('b h i c, b h i j -> b h j c',v,x)
         x=einops.rearrange(x,'b head c (h w) -> b (head c) h w', h=h,w=w)
         return x
 
@@ -48,13 +48,12 @@ class time_atten(nn.Module):
         x=x.squeeze()
         _,c,l=x.shape
         kv=self.conv_kv(x).chunk(2,dim=1)
-        k,v=map(lambda t:einops.rearrange(t,'b (c h) l -> b c h l',h=self.heads),kv)
+        k,v=map(lambda t:einops.rearrange(t,'b (c h) l -> b h c l',h=self.heads),kv)
         q = self.conv_q(x)
-        q = einops.rearrange(q, 'b (c h) l -> b c h l', h=self.heads)
+        q = einops.rearrange(q, 'b (c h) l -> b h c l', h=self.heads)
         scale = c ** -0.5
-        x = torch.einsum('b h i c, b h j c -> b h i j', q.permute(0, 2, 3, 1), k.permute(0, 2, 3, 1))
+        x = torch.einsum('b h i c, b h j c -> b h i j', q, k)
         x = F.softmax(x*scale)
-        x = torch.einsum('b h i c, b h j c -> b h i j', v, x)
-
+        x = torch.einsum('b h i c, b h i j -> b h j c', v, x)
         x = einops.rearrange(x, 'b h c l-> b (h c) l', l=l)
         return x
