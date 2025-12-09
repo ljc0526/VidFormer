@@ -2,7 +2,7 @@ import einops
 import torch
 from torch import nn as nn
 from torch.nn import functional as F
-from Util import Conv_atten
+from Util.Util import Conv_atten
 from einops import rearrange
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,40 +11,38 @@ import numpy as np
 class Vidformer(nn.Module):
     def __init__(self,patch_size,image_size,in_channels,out_channels,emd_dim,drop_out,depth,heads,dim_head,mlp_dim):
         super().__init__()
-        self.TransInit=TransInint(patch_size,image_size,in_channels,emd_dim,drop_out,pool='cls')
+        self.TransInit=TransInint(patch_size,image_size,in_channels,emd_dim,drop_out)
         self.depth=depth
         self.block=nn.ModuleList()
         self.stem=nn.Conv3d(in_channels,in_channels,kernel_size=3,padding=1)
         original_patch=patch_size
         self.trans = nn.Sequential(Transformer(emd_dim, heads, dim_head, mlp_dim, image_size, original_patch, drop_out))
-        self.cnn = CNN_block(in_channels, out_channels)
+        self.cnn = stem(out_channels)
         self.dim_decrease=nn.ModuleList()
         self.atten=nn.ModuleList()
         self.pool=nn.MaxPool3d(kernel_size=(1,2,2))
         for i in range (len(depth)):
-            feature_size=list(map(lambda x:x//(2**(i+1)),image_size))
+            feature_size=list(map(lambda x:x//(2**(i+2)),image_size))
             feature_size[0]=image_size[0]
             feature_size=tuple(feature_size)
-            patch_size = list(map(lambda x: x // (2 ** (i+1)), original_patch))
+            patch_size = list(map(lambda x: x // (2 ** (i+2)), original_patch))
             patch_size[0] = 25
             patch_size = tuple(patch_size)
             if i!=0:
-                self.atten.append(Conv_atten(heads=8,in_channels=out_channels,kernel_size=(2*(4-i)+1)))
+                self.atten.append(Conv_atten(heads=heads,in_channels=out_channels,kernel_size=(2*(4-i)+1)))
             for j in range(depth[i]):
                 self.block.append(block(emd_dim, heads, dim_head, mlp_dim, drop_out, out_channels, out_channels,
                                         feature_size, image_size,original_patch,patch_size))
         self.Generator=rPPGGnerator(out_channels,emd_dim)
     def forward(self,x,echo,batch_size,epoch_test):
         x = self.stem(x)
-        x1 = self.TransInit(x) 
+        x1 = self.TransInit(x)
         x1=self.trans(x1)
         x=self.cnn(x)
-        x=self.pool(x)
         num=0
         for i in range(len(self.depth)):
             if i!=0:
                 x=self.atten[i-1](x)
-            #show the feature map
             for j in range(self.depth[i]):
                  x,x1=self.block[j+num](x,x1,batch_size)
             num=num+self.depth[i]
@@ -54,7 +52,7 @@ class Vidformer(nn.Module):
 
 
 class TransInint(nn.Module):
-    def __init__(self,patch_size,image_size,in_channels,emd_dim,drop_out,pool='cls'):
+    def __init__(self,patch_size,image_size,in_channels,emd_dim,drop_out):
         super().__init__()
         video_len, video_height, video_width = pair(image_size)
         self.patch_t, self.patch_h, self.patch_w = pair(patch_size)
@@ -62,24 +60,43 @@ class TransInint(nn.Module):
         patch_num = (video_len // self.patch_t) * (video_height // self.patch_h) * (video_width // self.patch_w)
         patch_dim = in_channels * self.patch_t * self.patch_h * self.patch_w
         self.to_embedding = nn.Sequential(
-            nn.Linear(patch_dim, emd_dim)) 
+            nn.Linear(patch_dim, emd_dim))
         self.emd_dim = emd_dim
         self.pos_embedding = nn.Parameter(torch.randn(1, patch_num, emd_dim))
-        #self.cls_token = nn.Parameter(torch.randn(1, 1, emd_dim)) 
+        #self.cls_token = nn.Parameter(torch.randn(1, 1, emd_dim))
         self.dropout = nn.Dropout(drop_out)
-        self.pool = pool
-        assert pool in {'cls', 'mean'}
+
 
     def forward(self,x1):
         x1=einops.rearrange(x1,'b c (t dt) (h dh) (w dw) -> b (t h w) (dt dh dw c)', dt=self.patch_t, dh=self.patch_h, dw=self.patch_w)
-        x1 = self.to_embedding(x1) 
+        x1 = self.to_embedding(x1)
         #cls_token = einops.repeat(self.cls_token, '() n d -> b n d', b=x1.shape[0])
         #x1 = torch.cat((cls_token, x1), dim=1)
         x1 = self.pos_embedding + x1
         x1 = self.dropout(x1)
         return x1
 
-
+class stem(nn.Module):
+    def __init__(self,channel):
+        super(stem, self).__init__()
+        self.stem1=nn.Sequential(nn.Conv3d(3,channel//4,kernel_size=(1,5,5),padding=(0,2,2)),
+                                 nn.GroupNorm(num_channels=channel//4,num_groups=2),
+                                 nn.GELU())
+        self.pool1=nn.MaxPool3d(kernel_size=(1,2,2),stride=(1,2,2))
+        self.stem2=nn.Sequential(nn.Conv3d(channel//4,channel//2,kernel_size=3,padding=1),
+                                 nn.GroupNorm(num_channels=channel//2,num_groups=4),
+                                 nn.GELU())
+        self.pool2=nn.MaxPool3d(kernel_size=(1,2,2),stride=(1,2,2))
+        self.stem3=nn.Sequential(nn.Conv3d(channel//2,channel,kernel_size=3,padding=1),
+                                 nn.GroupNorm(num_channels=channel,num_groups=8),
+                                 nn.GELU())
+    def forward(self,x):
+        x=self.stem1(x)
+        x=self.pool1(x)
+        x=self.stem2(x)
+        x=self.pool2(x)
+        x=self.stem3(x)
+        return x
 
 class block(nn.Module):
     def __init__(self,emd_dim,heads,dim_head,mlp_dim,drop_out,in_channels,out_channels,feature_size,image_size,original_patch,patch_size):
@@ -90,7 +107,7 @@ class block(nn.Module):
         for _ in range(1):
             self.cnn.append(CNN_block(in_channels,out_channels))
         self.interaction1=Conv2Trans(out_channels,feature_size,emd_dim,out_channels)
-        self.interaction2=Trans2Conv(out_channels,out_channels)
+        self.interaction2=Trans2Conv(emd_dim,out_channels)
         #self.conv1=nn.Conv3d(out_channels,out_channels,kernel_size=1,stride=1)
 
 
@@ -107,7 +124,7 @@ class CNN_block(nn.Module):
     def __init__(self,in_channels,out_channels):
         super().__init__()
         self.module=nn.Sequential(nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
-                nn.GroupNorm(8,out_channels),
+                nn.GroupNorm(num_groups=out_channels//16,num_channels=out_channels),
                 nn.GELU()
            )
 
@@ -119,12 +136,16 @@ class Trans2Conv(nn.Module):
     def __init__(self,in_channels,out_channels):
         super().__init__()
         self.conv=nn.Conv3d(in_channels,out_channels,kernel_size=1)
-        self.out_channels=out_channels
+        self.conv1=nn.Sequential(nn.Conv3d(out_channels,out_channels,kernel_size=3,padding=1),
+                                 nn.GroupNorm(num_groups=out_channels//16,num_channels=out_channels),
+                                 nn.GELU())
+        self.in_channels=in_channels
 
     def forward(self,x,x1):
-        x1=x1.reshape(x.shape[0],self.out_channels,80,8,-1)
+        x1=x1.reshape(x.shape[0],self.in_channels,80,8,-1)
         x1=F.upsample(x1,size=(x.shape[2],x.shape[3],x.shape[4]),mode='trilinear')
-        x=self.conv(x1+x)
+        x1=self.conv(x1)
+        x=self.conv1(x1)+x
         return x
 
 
@@ -144,8 +165,6 @@ class Conv2Trans(nn.Module):
         x=self.to_embedding(x)
         x=self.lnorm(x)
         return x
-
-
 
 
 class MHSA(nn.Module):
@@ -208,7 +227,6 @@ class PreNorm(nn.Module):
         return self.fn(self.norm(x), **kwargs)
 
 
-
 class Transformer(nn.Module):
     def __init__(self, dim, heads, dim_head, mlp_dim, original_size,patch_size,dropout=0.):
         super().__init__()
@@ -228,9 +246,7 @@ class Transformer(nn.Module):
         x2=einops.rearrange(x2,'(b nh nw) nt h -> b (nt nw nh) h', nt=self.video_len//self.patch_t,nh=self.video_height//self.patch_h,nw=self.video_width//self.patch_w)
         x1 = einops.rearrange(x1, '(b nt) n h -> b (n nt) h', nt=self.video_len//self.patch_t)
         x= self.ff(x1+x2) + self.norm(x1+x2)
-        # plt.figure()
-        # plt.plot(x.squeeze()[0, :, 0:30].detach().cpu().numpy())
-        # plt.show()
+        # x=self.ff(x)+x
         return x
 
 
@@ -252,19 +268,4 @@ class rPPGGnerator(nn.Module):
         x1=self.transGener(x1)
         x = self.Conv(x)
         x=self.pool(x)
-        #x = self.lin(x.squeeze().unsqueeze(0))
-        # if echo>=epoch_test:
-        #     if batch_size==1:
-        #         x1=x1.squeeze().unsqueeze(0)
-        #     plt.figure()
-        #     plt.plot(np.array(x1[0, :].detach().cpu()))
-        #     plt.show()
-        # if echo >=epoch_test:
-        #     if batch_size==1:
-        #         x=x.squeeze().unsqueeze(0)
-        #     else:
-        #         x=x.squeeze()
-        #     plt.figure()
-        #     plt.plot(np.array(x[0, :].detach().cpu()))
-        #     plt.show()
         return x.squeeze(),x1.squeeze()
