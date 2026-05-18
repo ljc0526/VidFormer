@@ -18,18 +18,26 @@ This repository contains the core code for VidFormer-based remote photoplethysmo
 
 The code depends on common scientific Python packages and several project-specific libraries:
 
-- `python >= 3.9`
-- `torch`
-- `torchvision`
-- `numpy`
-- `matplotlib`
-- `opencv-python`
-- `dlib`
-- `scipy`
-- `h5py`
-- `heartpy`
-- `audtorch`
-- `tqdm`
+- `audtorch==0.6.4`
+- `dlib==19.24.0`
+- `einops==0.8.2`
+- `h5py==3.8.0`
+- `heartpy==1.2.7`
+- `matplotlib==3.7.1`
+- `numpy==1.24.2`
+- `opencv_python==4.8.1.78`
+- `Pillow==12.2.0`
+- `pywin32==306`
+- `scipy==1.17.1`
+- `skimage==0.0`
+- `thop==0.1.1`
+- `timm==1.0.27`
+- `torch==1.13.1`
+- `torch==2.2.2`
+- `torchvision==0.14.1+cu117`
+- `torchvision==0.17.2`
+- `tqdm==4.65.0`
+
 
 You also need the dlib landmark file:
 
