@@ -11,14 +11,6 @@ import heartpy
 import re
 
 class Dataset(Dataset):
-    """
-    Main modifications compared with the original version:
-    1. Replace global per-clip z-score normalization with Log-Relative Reflectance Normalization (LRRN).
-    2. Fix horizontal/vertical flip dimensions for [T, H, W, C] video tensors.
-    3. Add optional illumination/color augmentation before normalization.
-    4. Make temporal resampling more robust to boundary cases.
-    5. Avoid persistent_workers=True when num_workers=0 in build_dataloaders().
-    """
 
     def __init__(
             self,
